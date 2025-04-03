@@ -10,7 +10,7 @@ env:
   RESOURCE_GROUP: Holmium
   CONTAINER_APPS_ENVIRONMENT: holmium-env
   LOG_ANALYTICS_WORKSPACE: holmium-law
-  AZURE_CONTAINER_REGISTRY: holmium1SI21IS055.azurecr.io
+  AZURE_CONTAINER_REGISTRY: holmium1si21is055.azurecr.io # Changed to lowercase
   REPOSITORY_NAME: holmium
   APP_NAME: holmium
   CONTAINER_APP_NAME: holmium
@@ -64,7 +64,8 @@ jobs:
 
       - name: Ensure Azure Container Registry exists
         run: |
-          REGISTRY_NAME=$(echo "${{ env.AZURE_CONTAINER_REGISTRY }}" | cut -d'.' -f1)
+          # Extract registry name without domain and convert to lowercase
+          REGISTRY_NAME=$(echo "${{ env.AZURE_CONTAINER_REGISTRY }}" | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]')
           if ! az acr show --name $REGISTRY_NAME --resource-group ${{ env.RESOURCE_GROUP }} > /dev/null 2>&1; then
             az acr create \
               --name $REGISTRY_NAME \
@@ -109,8 +110,8 @@ jobs:
           tags: ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.REPOSITORY_NAME }}:${{ env.TAG_NAME }}
 
       - name: Create empty Container App (for identity provisioning)
-        if: ${{ !cancelled() }}
         run: |
+          # Fixed command syntax
           if ! az containerapp show --name ${{ env.CONTAINER_APP_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} > /dev/null 2>&1; then
             az containerapp create \
               --name ${{ env.CONTAINER_APP_NAME }} \
@@ -118,17 +119,25 @@ jobs:
               --environment ${{ env.CONTAINER_APPS_ENVIRONMENT }} \
               --ingress external \
               --target-port ${{ env.TARGET_PORT }} \
-              --image nginx \
-              --system-assigned true
+              --image nginx:latest \
+              --registry-server ${{ env.AZURE_CONTAINER_REGISTRY }}
           fi
+
+      - name: Enable system-assigned managed identity
+        run: |
+          az containerapp identity assign \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --system-assigned
 
       - name: Assign AcrPull to Container App's managed identity
         run: |
-          REGISTRY_NAME=$(echo "${{ env.AZURE_CONTAINER_REGISTRY }}" | cut -d'.' -f1)
-          PRINCIPAL_ID=$(az containerapp show \
+          # Extract registry name without domain and convert to lowercase
+          REGISTRY_NAME=$(echo "${{ env.AZURE_CONTAINER_REGISTRY }}" | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]')
+          PRINCIPAL_ID=$(az containerapp identity show \
             --name ${{ env.CONTAINER_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --query identity.principalId --output tsv)
+            --query principalId --output tsv)
           az role assignment create \
             --assignee "$PRINCIPAL_ID" \
             --role "AcrPull" \
