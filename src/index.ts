@@ -16,6 +16,9 @@ app.get("/generate", (context) => {
   const randomNumber = Math.floor(Math.random() * 1000); // Generates a random number between 0 and 999
   return context.json({ randomNumber }, 200);
 });
+app.get('/college', (c) => {
+  return c.text('Siddaganga Institute of Technology,Tumkur,572103');
+})
 serve({
   fetch: app.fetch,
   port: 3000
