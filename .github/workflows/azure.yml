@@ -10,7 +10,7 @@ env:
   RESOURCE_GROUP: Holmium
   CONTAINER_APPS_ENVIRONMENT: holmium-env
   LOG_ANALYTICS_WORKSPACE: holmium-law
-  ACR_REGISTRY: holmium1si16cs060.azurecr.io
+  ACR_REGISTRY: holmium1si21is055.azurecr.io
   ACR_REPOSITORY_NAME: holmium
   CONTAINER_APP_NAME: holmium
   TARGET_PORT: 3000
@@ -28,7 +28,7 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_GITHUB_ACTIONS }}
+          creds: ${{ secrets.AZURE_GITHUB_ACTIONS}}
 
       # INFRA ENSURE BLOCKS
       - name: Check Resource Group exists
