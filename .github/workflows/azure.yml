@@ -10,94 +10,121 @@ env:
   RESOURCE_GROUP: Holmium
   CONTAINER_APPS_ENVIRONMENT: holmium-env
   LOG_ANALYTICS_WORKSPACE: holmium-law
-  AZURE_CONTAINER_REGISTRY: holmium1si21is055.azurecr.io # Changed to lowercase
-  REPOSITORY_NAME: holmium
-  APP_NAME: holmium
+  ACR_REGISTRY: holmium1si16cs060.azurecr.io
+  ACR_REPOSITORY_NAME: holmium
   CONTAINER_APP_NAME: holmium
   TARGET_PORT: 3000
+  SUBSCRIPTION_ID: 480bb9b7-b15c-40cc-a96a-9d221c425df3
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # AUTH + CODE
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Extract tag name
-        id: extract_tag
-        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_GITHUB_ACTIONS}}
+          creds: ${{ secrets.AZURE_GITHUB_ACTIONS }}
 
-      - name: Ensure Resource Group exists
+      # INFRA ENSURE BLOCKS
+      - name: Check Resource Group exists
         run: |
-          az group show --name ${{ env.RESOURCE_GROUP }} || \
-          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.AZURE_REGION }}
+          RG_EXISTS=$(az group show \
+            --name "${{ env.RESOURCE_GROUP }}" \
+            --query name \
+            --output tsv 2>/dev/null || echo "")
 
-      - name: Ensure Log Analytics Workspace exists
-        run: |
-          if ! az monitor log-analytics workspace show --resource-group ${{ env.RESOURCE_GROUP }} --workspace-name ${{ env.LOG_ANALYTICS_WORKSPACE }} > /dev/null 2>&1; then
-            az monitor log-analytics workspace create \
-              --resource-group ${{ env.RESOURCE_GROUP }} \
-              --workspace-name ${{ env.LOG_ANALYTICS_WORKSPACE }} \
-              --location ${{ env.AZURE_REGION }}
+          if [ -z "$RG_EXISTS" ]; then
+            echo "❌ Resource group '${{ env.RESOURCE_GROUP }}' not found."
+            echo "👉 Please create it manually first."
+            exit 1
           fi
 
-      - name: Retrieve Log Analytics Workspace credentials
+      - name: Ensure Log Analytics Workspace
         run: |
+          WORKSPACE_EXISTS=$(az monitor log-analytics workspace show \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --workspace-name "${{ env.LOG_ANALYTICS_WORKSPACE }}" \
+            --query id \
+            --output tsv 2>/dev/null || echo "")
+
+          if [ -z "$WORKSPACE_EXISTS" ]; then
+            az monitor log-analytics workspace create \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --workspace-name "${{ env.LOG_ANALYTICS_WORKSPACE }}" \
+              --location "${{ env.AZURE_REGION }}"
+          fi
+
           WORKSPACE_ID=$(az monitor log-analytics workspace show \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --workspace-name ${{ env.LOG_ANALYTICS_WORKSPACE }} \
-            --query customerId --output tsv)
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --workspace-name "${{ env.LOG_ANALYTICS_WORKSPACE }}" \
+            --query customerId -o tsv)
+
           WORKSPACE_KEY=$(az monitor log-analytics workspace get-shared-keys \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --workspace-name ${{ env.LOG_ANALYTICS_WORKSPACE }} \
-            --query primarySharedKey --output tsv)
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --workspace-name "${{ env.LOG_ANALYTICS_WORKSPACE }}" \
+            --query primarySharedKey -o tsv)
+
           echo "::add-mask::$WORKSPACE_ID"
           echo "::add-mask::$WORKSPACE_KEY"
           echo "WORKSPACE_ID=$WORKSPACE_ID" >> $GITHUB_ENV
           echo "WORKSPACE_KEY=$WORKSPACE_KEY" >> $GITHUB_ENV
 
-      - name: Ensure Azure Container Registry exists
+      - name: Ensure Azure Container Registry (ACR)
         run: |
-          # Extract registry name without domain and convert to lowercase
-          REGISTRY_NAME=$(echo "${{ env.AZURE_CONTAINER_REGISTRY }}" | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]')
-          if ! az acr show --name $REGISTRY_NAME --resource-group ${{ env.RESOURCE_GROUP }} > /dev/null 2>&1; then
+          REGISTRY_NAME=$(echo "${{ env.ACR_REGISTRY }}" | cut -d'.' -f1)
+
+          ACR_EXISTS=$(az acr show \
+            --name "$REGISTRY_NAME" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query name \
+            --output tsv 2>/dev/null || echo "")
+
+          if [ -z "$ACR_EXISTS" ]; then
             az acr create \
-              --name $REGISTRY_NAME \
-              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --name "$REGISTRY_NAME" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
               --sku Standard \
               --admin-enabled true
           fi
-          ACR_USERNAME=$(az acr credential show --name $REGISTRY_NAME --query username -o tsv)
-          ACR_PASSWORD=$(az acr credential show --name $REGISTRY_NAME --query passwords[0].value -o tsv)
+
+          ACR_USERNAME=$(az acr credential show --name "$REGISTRY_NAME" --query username -o tsv)
+          ACR_PASSWORD=$(az acr credential show --name "$REGISTRY_NAME" --query passwords[0].value -o tsv)
+
           echo "::add-mask::$ACR_USERNAME"
           echo "::add-mask::$ACR_PASSWORD"
           echo "ACR_USERNAME=$ACR_USERNAME" >> $GITHUB_ENV
           echo "ACR_PASSWORD=$ACR_PASSWORD" >> $GITHUB_ENV
 
-      - name: Ensure Container Apps Environment exists
+      - name: Ensure Container Apps Environment
         run: |
-          if ! az containerapp env show --name ${{ env.CONTAINER_APPS_ENVIRONMENT }} --resource-group ${{ env.RESOURCE_GROUP }} > /dev/null 2>&1; then
+          ENV_EXISTS=$(az containerapp env show \
+            --name "${{ env.CONTAINER_APPS_ENVIRONMENT }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query name \
+            --output tsv 2>/dev/null || echo "")
+
+          if [ -z "$ENV_EXISTS" ]; then
             az containerapp env create \
-              --name ${{ env.CONTAINER_APPS_ENVIRONMENT }} \
-              --resource-group ${{ env.RESOURCE_GROUP }} \
-              --location ${{ env.AZURE_REGION }} \
-              --logs-workspace-id $WORKSPACE_ID \
-              --logs-workspace-key $WORKSPACE_KEY
+              --name "${{ env.CONTAINER_APPS_ENVIRONMENT }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --location "${{ env.AZURE_REGION }}" \
+              --logs-workspace-id "$WORKSPACE_ID" \
+              --logs-workspace-key "$WORKSPACE_KEY"
           fi
 
+      # DOCKER BUILD + PUSH
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Azure Container Registry
+      - name: Login to ACR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.AZURE_CONTAINER_REGISTRY }}
+          registry: ${{ env.ACR_REGISTRY }}
           username: ${{ env.ACR_USERNAME }}
           password: ${{ env.ACR_PASSWORD }}
 
@@ -107,45 +134,19 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.REPOSITORY_NAME }}:${{ env.TAG_NAME }}
+          tags: ${{ env.ACR_REGISTRY }}/${{ env.ACR_REPOSITORY_NAME }}:${{ github.ref_name }}
 
-      - name: Create empty Container App (for identity provisioning)
+      # CONTAINER APP DEPLOY
+      - name: Crate/update Container App
         run: |
-          # Fixed command syntax
-          if ! az containerapp show --name ${{ env.CONTAINER_APP_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} > /dev/null 2>&1; then
-            az containerapp create \
-              --name ${{ env.CONTAINER_APP_NAME }} \
-              --resource-group ${{ env.RESOURCE_GROUP }} \
-              --environment ${{ env.CONTAINER_APPS_ENVIRONMENT }} \
-              --ingress external \
-              --target-port ${{ env.TARGET_PORT }} \
-              --image nginx:latest \
-              --registry-server ${{ env.AZURE_CONTAINER_REGISTRY }}
-          fi
-
-      - name: Enable system-assigned managed identity
-        run: |
-          az containerapp identity assign \
-            --name ${{ env.CONTAINER_APP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --system-assigned
-
-      - name: Assign AcrPull to Container App's managed identity
-        run: |
-          # Extract registry name without domain and convert to lowercase
-          REGISTRY_NAME=$(echo "${{ env.AZURE_CONTAINER_REGISTRY }}" | cut -d'.' -f1 | tr '[:upper:]' '[:lower:]')
-          PRINCIPAL_ID=$(az containerapp identity show \
-            --name ${{ env.CONTAINER_APP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --query principalId --output tsv)
-          az role assignment create \
-            --assignee "$PRINCIPAL_ID" \
-            --role "AcrPull" \
-            --scope /subscriptions/${{ secrets.SUBSCRIPTION_ID }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.ContainerRegistry/registries/$REGISTRY_NAME
-
-      - name: Update Container App with real image
-        run: |
-          az containerapp update \
-            --name ${{ env.CONTAINER_APP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.REPOSITORY_NAME }}:${{ env.TAG_NAME }}
+          az containerapp up \
+            --name "${{ env.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --environment "${{ env.CONTAINER_APPS_ENVIRONMENT }}" \
+            --ingress external \
+            --target-port "${{ env.TARGET_PORT }}" \
+            --location "${{ env.AZURE_REGION }}" \
+            --image "${{ env.ACR_REGISTRY }}/${{ env.ACR_REPOSITORY_NAME }}:${{ github.ref_name }}" \
+            --registry-server "${{ env.ACR_REGISTRY }}" \
+            --registry-username "${{ env.ACR_USERNAME }}" \
+            --registry-password "${{ env.ACR_PASSWORD }}"
